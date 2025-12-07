@@ -1,0 +1,6 @@
+[package]
+name = "uwu-qr"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

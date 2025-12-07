@@ -1,8 +1,10 @@
 use clap::{Parser, Subcommand};
-use log::{debug, error, info, trace, warn};
+use log::info;
 use pretty_env_logger;
 use std::path::PathBuf;
 
+mod analysis_helpers;
+mod extraction_helpers;
 mod pdf_ops;
 mod pdf_post_parse_sec_checks;
 mod pdf_pre_parse_sec_checks;
@@ -30,7 +32,10 @@ enum Commands {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    pretty_env_logger::init();
+    pretty_env_logger::formatted_builder()
+        .filter_level(log::LevelFilter::Warn)
+        .parse_default_env()
+        .init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -44,10 +49,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 path
             });
 
+            info!(
+                "extracting pdf {} to {}",
+                input_file.display(),
+                output_path.display()
+            );
+
             pdf_ops::extract_pdf(&input_file, &output_path);
         }
         Commands::Analyze { input_file } => {
-            info!("Analyzing PDF: {}", input_file.display());
+            info!("analyzing pdf: {}", input_file.display());
             pdf_ops::analyze_pdf(&input_file)?;
         }
     }

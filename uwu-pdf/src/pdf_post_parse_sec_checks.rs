@@ -1,4 +1,5 @@
 use colored::Colorize;
+use log::{debug, info};
 use lopdf::Object;
 use std::collections::HashSet;
 
@@ -13,6 +14,7 @@ pub struct SuspiciousFeatures {
 
 /// run post-parsing security checks
 pub fn post_parse_sec_checks(doc: &lopdf::Document) {
+    info!("running post-parse security checks");
     let results = detect_suspicious_features(doc);
     print_post_parse_warnings(results);
 }
@@ -21,6 +23,7 @@ pub fn post_parse_sec_checks(doc: &lopdf::Document) {
 ///
 /// probably a fairly naive list of checks to just look for obvious pdf smells
 pub fn detect_suspicious_features(doc: &lopdf::Document) -> SuspiciousFeatures {
+    debug!("detecting suspicious features in PDF");
     let mut features = SuspiciousFeatures::default();
 
     let mut referenced_ids = HashSet::new();

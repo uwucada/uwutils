@@ -1,4 +1,5 @@
 use colored::Colorize;
+use log::debug;
 
 #[derive(Debug, Default)]
 pub struct PreParseResults {
@@ -10,6 +11,8 @@ pub struct PreParseResults {
 
 /// wrapper to run pre-parse sec checks
 pub fn pre_parse_sec_checks(bytes: &[u8]) -> PreParseResults {
+    debug!("running pre-parse security checks on {} bytes", bytes.len());
+
     let prepend_result = check_prepended_data_bytes(bytes);
     let append_result = check_appended_data_bytes(bytes);
 
@@ -56,7 +59,7 @@ fn print_pre_parse_warnings(results: &PreParseResults) {
 
     if let Some(prepend_bytes) = results.prepended_bytes {
         warnings.push(format!(
-            "{} {} bytes before PDF header (stripped during load)",
+            "{} {} bytes before PDF header",
             "「prepended data」\t".yellow().bold(),
             prepend_bytes.to_string().yellow()
         ));
@@ -64,7 +67,7 @@ fn print_pre_parse_warnings(results: &PreParseResults) {
 
     if let Some(append_bytes) = results.appended_bytes {
         warnings.push(format!(
-            "{} {} bytes after EOF header (stripped during load)",
+            "{} {} bytes after EOF header",
             "「appended data」\t".yellow().bold(),
             append_bytes.to_string().yellow()
         ));

@@ -1,41 +1,14 @@
-use colored::Colorize;
-use log::{info, warn};
-use lopdf::Object;
-use std::collections::HashMap;
+use log::{debug, error, info};
+use std::fs;
 use std::path::PathBuf;
 
+use crate::analysis_helpers::{PdfStats, count_object_types, print_pdf_stats};
+use crate::extraction_helpers::{
+    extract_padding, extract_pdf_streams, print_extraction_header, print_extraction_summary,
+};
 use crate::pdf_post_parse_sec_checks;
 use crate::pdf_pre_parse_sec_checks;
 use crate::pdf_pre_parse_sec_checks::PreParseResults;
-
-#[derive(Debug, Default)]
-pub struct PdfStats {
-    pub object_count: usize,
-    pub page_count: usize,
-    pub images: usize,
-    pub fonts: usize,
-    pub streams: usize,
-    pub dictionaries: usize,
-    pub arrays: usize,
-    pub strings: usize,
-    pub names: usize,
-    pub integers: usize,
-    pub reals: usize,
-    pub booleans: usize,
-    pub nulls: usize,
-    pub references: usize,
-    pub annotations: usize,
-    pub form_xobjects: usize,
-    pub filter_types: HashMap<String, usize>,
-    pub color_spaces: HashMap<String, usize>,
-}
-/**
-#[derive(Debug, Default)]
-pub struct PdfRepairInfo {
-    pub prepended_bytes: Option<usize>,
-    pub appended_bytes: Option<usize>,
-}
- */
 
 /// load pdf, check for issues and try repair
 ///
@@ -45,14 +18,16 @@ pub struct PdfRepairInfo {
 pub fn repair_and_load_pdf(
     file_path: &PathBuf,
 ) -> Result<(lopdf::Document, PreParseResults), lopdf::Error> {
-    use log::{error, info, warn};
+    info!("loading and repairing PDF: {}", file_path.display());
 
     let mut repair_info = PreParseResults::default();
 
     let mut pdf_bytes = std::fs::read(file_path).map_err(|e| {
-        error!("Could not read file: {}", e);
+        error!("could not read file: {}", e);
         lopdf::Error::IO(e)
     })?;
+
+    debug!("read {} bytes from PDF file", pdf_bytes.len());
 
     let pre_parse_results = pdf_pre_parse_sec_checks::pre_parse_sec_checks(&pdf_bytes);
 
@@ -69,7 +44,6 @@ pub fn repair_and_load_pdf(
         }
     }
 
-    // if pdf is valid at all it should load now
     match lopdf::Document::load_mem(&pdf_bytes) {
         Ok(doc) => {
             info!("pdf loaded successfully");
@@ -82,7 +56,36 @@ pub fn repair_and_load_pdf(
     }
 }
 
-/// prints PDF object counts
+/// load pdf from bytes with pre-parse results already computed
+fn load_pdf_from_bytes(
+    mut pdf_bytes: Vec<u8>,
+    pre_parse_results: &PreParseResults,
+) -> Result<lopdf::Document, lopdf::Error> {
+    use log::error;
+
+    if let Some(prepend_bytes) = pre_parse_results.prepended_bytes {
+        pdf_bytes = pdf_bytes[prepend_bytes..].to_vec();
+    }
+
+    if pre_parse_results.appended_bytes.is_some() {
+        if let Some(eof_position) = pdf_bytes.windows(5).position(|window| window == b"%%EOF") {
+            pdf_bytes.truncate(eof_position + 5);
+        }
+    }
+
+    match lopdf::Document::load_mem(&pdf_bytes) {
+        Ok(doc) => {
+            info!("pdf loaded successfully");
+            Ok(doc)
+        }
+        Err(e) => {
+            error!("failed to load PDF: {:?}", e);
+            Err(e)
+        }
+    }
+}
+
+/// prints PDF object counts and does a simple security check
 ///
 /// this just prints the counts of the various object types,
 /// it's kinda intended to show you if something is worth
@@ -90,16 +93,23 @@ pub fn repair_and_load_pdf(
 ///
 /// probably not super reliable but it's a decent start?
 pub fn analyze_pdf(file_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    info!("starting PDF analysis");
     let (doc, _) = repair_and_load_pdf(file_path)?;
 
     let mut stats = PdfStats::default();
     stats.object_count = doc.objects.len();
     stats.page_count = doc.get_pages().len();
 
+    debug!(
+        "analyzing {} objects across {} pages",
+        stats.object_count, stats.page_count
+    );
+
     for (_object_id, object) in doc.objects.iter() {
         count_object_types(object, &mut stats);
     }
 
+    info!("running post-parse security checks");
     pdf_post_parse_sec_checks::post_parse_sec_checks(&doc);
 
     print_pdf_stats(stats);
@@ -107,118 +117,53 @@ pub fn analyze_pdf(file_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+/// extracts objects from pdf
+///
+/// currently handles text fields, binary data, and images,
+/// though implementation is likely incomplete.
 pub fn extract_pdf(input_file: &PathBuf, output_dir: &PathBuf) {
-    println!(
-        "extracting {} to {}",
+    info!(
+        "Starting PDF extraction: {} -> {}",
         input_file.display(),
         output_dir.display()
-    )
-}
+    );
+    print_extraction_header(input_file, output_dir);
 
-fn count_object_types(object: &Object, stats: &mut PdfStats) {
-    match object {
-        Object::Boolean(_) => stats.booleans += 1,
-        Object::Integer(_) => stats.integers += 1,
-        Object::Real(_) => stats.reals += 1,
-        Object::Name(_) => stats.names += 1,
-        Object::String(_, _) => stats.strings += 1,
-        Object::Array(_) => stats.arrays += 1,
-        Object::Reference(_) => stats.references += 1,
-        Object::Null => stats.nulls += 1,
-
-        Object::Stream(stream) => {
-            stats.streams += 1;
-
-            let dict = &stream.dict;
-
-            if let Ok(filter) = dict.get(b"Filter") {
-                let filter_name = match filter {
-                    Object::Name(name) => Some(String::from_utf8_lossy(name).to_string()),
-                    Object::Array(arr) if !arr.is_empty() => {
-                        if let Object::Name(name) = &arr[0] {
-                            Some(String::from_utf8_lossy(name).to_string())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                if let Some(name) = filter_name {
-                    *stats.filter_types.entry(name).or_insert(0) += 1;
-                }
-            }
-
-            if let Ok(Object::Name(subtype)) = dict.get(b"Subtype") {
-                if subtype == b"Image" {
-                    stats.images += 1;
-
-                    if let Ok(Object::Name(cs)) = dict.get(b"ColorSpace") {
-                        let cs_name = String::from_utf8_lossy(cs).to_string();
-                        *stats.color_spaces.entry(cs_name).or_insert(0) += 1;
-                    }
-                }
-            }
-
-            if let Ok(Object::Name(type_name)) = dict.get(b"Type") {
-                if type_name == b"XObject" {
-                    if let Ok(Object::Name(subtype)) = dict.get(b"Subtype") {
-                        if subtype == b"Form" {
-                            stats.form_xobjects += 1;
-                        }
-                    }
-                }
-            }
+    let pdf_bytes = match fs::read(input_file) {
+        Ok(bytes) => {
+            debug!("Read {} bytes from input file", bytes.len());
+            bytes
         }
-
-        Object::Dictionary(dict) => {
-            stats.dictionaries += 1;
-            if let Ok(Object::Name(type_name)) = dict.get(b"Type") {
-                match type_name.as_slice() {
-                    b"Font" => stats.fonts += 1,
-                    b"Annot" => stats.annotations += 1,
-                    _ => {}
-                }
-            }
+        Err(e) => {
+            error!("Failed to read input file: {}", e);
+            return;
         }
-    }
-}
+    };
 
-/// prints pdf stats
-///
-/// this really doesn't need to be factored out but i think it
-/// looks ugly in the main analysis function so i'm hiding it
-/// down here where nobody will ever find it
-fn print_pdf_stats(stats: PdfStats) {
-    println!("{}", "「pdf stats」".cyan().bold());
-    println!("  {}: {}", "Pages".green(), stats.page_count);
-    println!("  {}: {}", "Total Objects".green(), stats.object_count);
-    println!("  {}: {}", "Images".green(), stats.images);
-    println!("  {}: {}", "Fonts".green(), stats.fonts);
-    println!("  {}: {}", "Streams".green(), stats.streams);
-    println!("  {}: {}", "Dictionaries".green(), stats.dictionaries);
-    println!("  {}: {}", "Arrays".green(), stats.arrays);
-    println!("  {}: {}", "Strings".green(), stats.strings);
-    println!("  {}: {}", "Names".green(), stats.names);
-    println!("  {}: {}", "Integers".green(), stats.integers);
-    println!("  {}: {}", "Reals".green(), stats.reals);
-    println!("  {}: {}", "Booleans".green(), stats.booleans);
-    println!("  {}: {}", "Nulls".green(), stats.nulls);
-    println!("  {}: {}", "References".green(), stats.references);
-    println!("  {}: {}", "Annotations".green(), stats.annotations);
-    println!("  {}: {}", "Form XObjects".green(), stats.form_xobjects);
+    let pre_parse_results = pdf_pre_parse_sec_checks::pre_parse_sec_checks(&pdf_bytes);
 
-    if !stats.filter_types.is_empty() {
-        println!("  {}:", "Filter Types".green());
-        for (filter, count) in &stats.filter_types {
-            println!("    {}: {}", filter.cyan(), count);
-        }
+    if fs::create_dir_all(output_dir).is_err() {
+        error!(
+            "Could not create output directory: {}",
+            output_dir.display()
+        );
+        return;
     }
 
-    if !stats.color_spaces.is_empty() {
-        println!("  {}:", "Color Spaces".green());
-        for (cs, count) in &stats.color_spaces {
-            println!("    {}: {}", cs.cyan(), count);
+    extract_padding(output_dir, &pre_parse_results);
+
+    let doc = match load_pdf_from_bytes(pdf_bytes, &pre_parse_results) {
+        Ok(doc) => doc,
+        Err(e) => {
+            error!("Could not load PDF: {:?}", e);
+            return;
         }
-    }
+    };
+
+    let counts = extract_pdf_streams(&doc, output_dir);
+    info!(
+        "Extraction complete: {} images, {} text files, {} binary files",
+        counts.images, counts.text, counts.binary
+    );
+    print_extraction_summary(&counts, &pre_parse_results);
 }

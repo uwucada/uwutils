@@ -1,0 +1,4 @@
+[package]
+name = "uwu-id3"
+version.workspace = true
+edition.workspace = true

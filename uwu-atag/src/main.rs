@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    info!("reading ID3 tags from file: {}", cli.input.display());
+    info!("reading tags from file: {}", cli.input.display());
     tag_reader::read_and_display_tags(&cli.input)?;
 
     Ok(())

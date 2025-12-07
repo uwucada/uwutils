@@ -1,0 +1,4 @@
+[package]
+name = "uwu-atag"
+version.workspace = true
+edition.workspace = true

@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "uwu-pdf",
     "uwu-qr",
-    "uwu-atag"
+    "uwu-atag",
+    "uwu-mp3c"
 ]
 
 [workspace.package]
